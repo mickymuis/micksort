@@ -13,6 +13,7 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <string.h>
+#include <math.h>
 
 typedef uint32_t elem_t;
 
@@ -31,7 +32,7 @@ randSeq( elem_t* buf, size_t nmemb, int seed, int rank ) {
     srand( SEED[seed] + rank );
 
     for( size_t i =0; i < nmemb; i++ )
-        buf[i] = rand() % 100;
+        buf[i] = rand() /*% 100*/;
 }
 
 static void
@@ -53,6 +54,21 @@ merge( elem_t* buf, size_t m, size_t n ) {
     }
 
     free( tmp );
+    /*size_t i=0, j=m+1, off =0;
+
+    while( i < m && j < m+n ) {
+        assert( i < j );
+        if( j < m+n && ( buf[j] < buf[i] || i >= m ) ) {
+            // Insert
+            elem_t tmp =buf[j];
+            memmove( buf + i + 1, buf + i, (j-i) * sizeof(elem_t) ); 
+            buf[i] = tmp;
+            j++;
+        } else {
+            // No action
+        }
+        i++;
+    }*/
 }
 
 static int
@@ -118,7 +134,7 @@ micksort( size_t count, int seed, int rank, int procs ) {
                 if( buf == NULL ) {
                     buf = calloc( m, sizeof(elem_t) );
                     randSeq( buf, m, seed, rank );
-                    printf( "Seq %d: ", rank ); printSeq( buf, m );
+                    //printf( "Seq %d: ", rank ); printSeq( buf, m );
                 }
 
                 int n = partsize( count, ppn, p + (src_rank==dst_rank?1:-1), np );
@@ -132,9 +148,9 @@ micksort( size_t count, int seed, int rank, int procs ) {
         MPI_Barrier( MPI_COMM_WORLD );
     }
 
-    if( rank == 0 ) {
+    /*if( rank == 0 ) {
         printf( "Result: " ); printSeq( buf, length );
-    }
+    }*/
 }
 
 
@@ -143,15 +159,57 @@ main( int argc, char** argv ) {
 
     int procs, rank;
     int seed =0;
-    size_t count =64; // for now
+    size_t count =80000000; // for now
+/*    elem_t binSize = (1L << 31) / count;
+
+    elem_t* buf = calloc( count, sizeof(elem_t) );
+    srand( SEED[seed] + rank );
+
+    size_t off =0;
+    for( size_t i =0; i < count; i++ ) {
+        elem_t x = rand();
+        buf[off++] = x;
+    }
+
+    qsort( buf, count, sizeof(elem_t), elem_compare );
+
+    elem_t max_dif =0;
+
+    for( size_t i =0; i < count; i++ ) {
+        int64_t binBase = binSize * (i+1);
+
+        int64_t dif =(int64_t)binBase - (int64_t)buf[i];
+        if( dif < 0 ) dif = -dif;
+
+
+        if( (uint32_t)dif > max_dif ) max_dif =(uint32_t)dif;
+    }
+
+    printf ( "Stored %ld numbers. Max absolute delta is %d in bins of size %d\n", count, max_dif, binSize );*/
+
+  /*  for( size_t i =0; i < count; i++ ) {
+        int64_t binBase = binSize * (i+1);
+
+        int64_t dif =(int64_t)binBase - (int64_t)buf[i];
+        printf( "[%ld] bin %ld, value %ld (%d)\n", i, binBase, dif, buf[i] );
+
+    }
+
+
+    free( buf );*/
 
     MPI_Init( &argc, &argv );
 
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &procs );
 
+    double start_time = MPI_Wtime();
     micksort( count, seed, rank, procs );
-
+    double end_time = MPI_Wtime();
+    
+    
+    if( rank==0) printf( "(t) Sorted %ld elements in %gs\n", count, end_time-start_time );
+    
     MPI_Finalize();
 
     return 0;
