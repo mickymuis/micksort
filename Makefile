@@ -1,6 +1,6 @@
 # General flags
 CC = mpicc
-CFLAGS = -Wall -O3 -g -fopenmp
+CFLAGS = -Wall -O3 -g -fopenmp -march=native
 LDFLAGS = -lm
 
 BIN = build/micksort
