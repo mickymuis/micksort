@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
+#include <getopt.h>
 
 #include <emmintrin.h>
 #include <pmmintrin.h>
@@ -24,6 +25,7 @@ typedef map_t* mapptr_t;
 
 //#define N RAND_MAX+1UL // Number of possible values obtained from rand()
 #define N 2147483648UL
+//#define N 64
 #define CHUNK_SIZE 268435456U 
 #define N_CHUNKS ((N) / (CHUNK_SIZE))
 
@@ -53,10 +55,10 @@ printSeq( elem_t* buf, uint64_t nmemb ) {
 }
 
 static void
-printMap( mapptr_t map ) {
-    for( uint64_t i=0; i < N; i++ ) {
+printMap( mapptr_t map, size_t n, int base ) {
+    for( uint64_t i=0; i < n; i++ ) {
         if( map[i] ) 
-            printf( "%ld(%d), ", i, map[i] );
+            printf( "%ld(%d), ", i+base, map[i] );
     }
     printf( "\n" );
 }
@@ -71,11 +73,19 @@ randSeq( elem_t* buf, uint64_t nmemb, int seed, int rank ) {
 
 static void
 randSeq2( mapptr_t map, uint64_t count, int seed, int rank ) {
-    printf (  "Generating %ld prn's\n", count );
+    //printf (  "Generating %ld prn's\n", count );
+#ifdef FAST_RAND
     srand_simple( SEED[seed] + rank );
+#else
+    srand( SEED[seed] + rank );
+#endif
 
     for( uint64_t i =0; i < count; i++ ) {
-        elem_t num = rand_simple() % 20;
+#ifdef FAST_RAND
+        elem_t num = rand_simple();
+#else        
+        elem_t num = rand_simple();
+#endif
         map[num] ++;
 
     //    assert( map[num] < 255 );
@@ -95,7 +105,7 @@ randSeq2( mapptr_t map, uint64_t count, int seed, int rank ) {
         
     }*/
 
-    printf( "done.\n" );
+    //printf( "done.\n" );
 }
 
 static void
@@ -146,6 +156,31 @@ merge2( mapptr_t map1, mapptr_t map2 ) {
     }
 }
 
+static void
+mergemm( mapptr_t restrict dst, mapptr_t restrict maps, int n, int stride ) {
+
+    /*for( int i =0; i < stride; i++ ) {
+        for( int j =0; j < n; j++ ) {
+            dst[i] += maps[j*stride+i];
+        }
+    }*/
+    const blockSize = stride / 64;
+
+#pragma omp parallel for
+    for( int b =0; b < stride; b+= blockSize ) {
+        for( int i =0; i < blockSize; i+=16 ) {
+            __m128i sum = _mm_setzero_si128();
+            for( int j =0; j < n; j++ ) {
+                //dst[i] += maps[j*stride+i];
+                __m128i a = _mm_load_si128( (const __m128i*) &maps[j*stride+i+b] );
+                sum = _mm_add_epi8( sum, a );
+            }
+            _mm_store_si128( (__m128i*) &dst[i+b], sum );
+
+        }
+    }
+}
+
 static int
 elem_compare( const void* apt, const void* bpt ) {
     elem_t a =*(elem_t*)apt;
@@ -190,6 +225,7 @@ reduce( mapptr_t map, int rank, int remote_rank, uint64_t m, uint64_t n, bool ro
 
     if( rank == remote_rank ) {
         mapptr_t tmp =calloc( N, sizeof(map_t) );
+        //mapptr_t tmp =_mm_alloc( N*sizeof(map_t), 16 );
         if( !tmp ) {
             printf( "alloc error\n" );
         }
@@ -198,6 +234,7 @@ reduce( mapptr_t map, int rank, int remote_rank, uint64_t m, uint64_t n, bool ro
         merge2( map, tmp );
 
         free( tmp );
+        //_mm_free( tmp );
     } else {
         MPI_Send( (void*)map, N>>2, MPI_INT, remote_rank, 0, MPI_COMM_WORLD );
     }
@@ -292,21 +329,25 @@ micksort2( mapptr_t map, uint64_t count, int seed, int rank, int procs ) {
     }*/
 }
 
-static void
-micksort3( mapptr_t map, uint64_t count, int seed, int rank, int procs ) {
+static mapptr_t
+micksort3( uint64_t count, int seed, int rank, int procs ) {
 
     /* Generation part */
     const size_t npp = count / procs; // Numbers to generate per process
     const size_t c = rank==0 ? count % procs : 0; // Remainder in case count % P != 0
 
     // Generate and sort the local sequence
+    //mapptr_t map =calloc( N, sizeof( map_t ) );
+    mapptr_t map = _mm_malloc( N*sizeof(map_t), 16 );
+
     randSeq2( map, npp+c, seed, rank );
 
-    printf( "Node %d: ", rank ); printMap( map );
+    //printf( "Node %d: ", rank ); printMap( map, N, 0 );
 
     /* Communication part */
     const int bpp = N / procs; // Number of bins per process
-    mapptr_t inmap = calloc( N, sizeof(map_t) );
+    const int base = rank * bpp; 
+   // mapptr_t inmap = calloc( N, sizeof(map_t) );
 
 /*    MPI_Request req[procs];
     MPI_Status stat[procs];
@@ -328,90 +369,162 @@ micksort3( mapptr_t map, uint64_t count, int seed, int rank, int procs ) {
         printf( "%d <- %d\n", rank, i );
     }*/
 
-    for( int root =0; root < procs; root++ )
-        MPI_Gather( (void*)(map+root*bpp), bpp, MPI_BYTE, inmap, bpp, MPI_BYTE, root, MPI_COMM_WORLD );
+    mapptr_t sorted;
+
+    if( procs > 1 ) {
+        mapptr_t inmap = _mm_malloc( N * sizeof(map_t), 16 );
+        
+        for( int root =0; root < procs; root++ )
+            MPI_Gather( (void*)(map+root*bpp), bpp, MPI_BYTE, inmap, bpp, MPI_BYTE, root, MPI_COMM_WORLD );
+
+        _mm_free( map );
+
+        sorted =_mm_malloc( N*sizeof(map_t), 16 );
+
+        mergemm( sorted, inmap, procs, bpp );
+
+        _mm_free( inmap );
+
+    }
+    else sorted = map;
+
+    return sorted;
+}
+
+void
+printParallel( mapptr_t restrict map, unsigned int skip, int rank, int procs ) {
+    const unsigned int bpp = N / procs;    // Number of bins per process
+    const unsigned int base = rank * bpp;  // Value of the first element in the map
+    unsigned int skipCount =0;             // Number of elements skipped so far
 
 
+    for( int r =0; r < procs; r++ ) {
+        if( rank == r ) {
+            if( rank != 0 ) {
+                MPI_Recv( &skipCount, 1, MPI_INT, rank-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
+            }
 
+            for( unsigned int i =0; i < bpp; i++ ) {
+                for( unsigned int j =0; j < map[i]; j++ ) {
+                    if( skipCount == 0 ) {
+                        printf( "%d ", base+i );
+                    }
+                    if( ++skipCount == skip ) skipCount =0;
+                }
+            }
+
+            if( rank != procs - 1 )
+                MPI_Send( &skipCount, 1, MPI_INT, rank+1, 0, MPI_COMM_WORLD );
+            else
+                printf( "\n" );
+
+            fflush( stdout );
+
+        }
+        MPI_Barrier( MPI_COMM_WORLD );
+    }
 }
 
 int
 main( int argc, char** argv ) {
 
-    int procs, rank;
-    int seed =0;
-    //uint64_t count =16000000000UL; // for now
-    //uint64_t count =80000000;
-    uint64_t count =16;
-/*    elem_t binSize = (1L << 31) / count;
+    int 	    procs, rank;
+    int 	    seed =0, skip =1;
+    uint64_t 	    count = 0;
+    int             c;
+    const char    * short_opt = "hs:n:i:";
+    struct option   long_opt[] =
+    {
+	{"help",          no_argument,       NULL, 'h'},
+	{"count",         required_argument, NULL, 'n'},
+	{"seed",          required_argument, NULL, 's'},
+	{"skip",          required_argument, NULL, 'i'},
+	{NULL,            0,                 NULL, 0  }
+    };
 
-    elem_t* buf = calloc( count, sizeof(elem_t) );
-    srand( SEED[seed] + rank );
+    while( (c = getopt_long( argc, argv, short_opt, long_opt, NULL )) != -1 )
+    {
+	switch( c )
+	{
+	    case -1:
+	    case 0:
+		break;
 
-    uint64_t off =0;
-    for( uint64_t i =0; i < count; i++ ) {
-        elem_t x = rand();
-        buf[off++] = x;
-    }
+	    case 's':
+		seed = atoi( optarg );
+                if( seed < 0 || seed >= N_SEEDS ) { 
+                    fprintf( stderr, "(e) Invalid seed index.\n" );
+                    return -2;
+                }
+		break;
 
-    qsort( buf, count, sizeof(elem_t), elem_compare );
+            case 'n':
+                count =atol( optarg );
+                break;
 
-    elem_t max_dif =0;
+            case 'i':
+                skip =atoi( optarg );
+                break;
 
-    for( uint64_t i =0; i < count; i++ ) {
-        int64_t binBase = binSize * (i+1);
+	    case 'h':
+		printf( "(i) Usage: %s [OPTIONS]\n", argv[0] );
+		printf( "  -s, --seed n              seed index for pseudo random numbers 0..%d\n", N_SEEDS-1 );
+		printf( "  -n, --count n             total length of the random array\n" );
+		printf( "  -i, --skip n              print only every n-th number\n" );
+		printf( "  -h, --help                print this help and exit\n" );
+		printf( "\n");
+		return 0;
 
-        int64_t dif =(int64_t)binBase - (int64_t)buf[i];
-        if( dif < 0 ) dif = -dif;
+	    case ':':
+	    case '?':
+		fprintf( stderr, "(e) Try `%s --help' for more information.\n", argv[0] );
+		return -2;
 
-
-        if( (uint32_t)dif > max_dif ) max_dif =(uint32_t)dif;
-    }
-
-    printf ( "Stored %ld numbers. Max absolute delta is %d in bins of size %d\n", count, max_dif, binSize );*/
-
-  /*  for( uint64_t i =0; i < count; i++ ) {
-        int64_t binBase = binSize * (i+1);
-
-        int64_t dif =(int64_t)binBase - (int64_t)buf[i];
-        printf( "[%ld] bin %ld, value %ld (%d)\n", i, binBase, dif, buf[i] );
-
-    }
-
-
-    free( buf );*/
+	    default:
+		fprintf( stderr, "(e) %s: invalid option -- %c\n", argv[0], c );
+		fprintf( stderr, "(e) Try `%s --help' for more information.\n", argv[0] );
+		return -2;
+	};
+    };
 
     MPI_Init( &argc, &argv );
-
     MPI_Comm_rank( MPI_COMM_WORLD, &rank );
     MPI_Comm_size( MPI_COMM_WORLD, &procs );
 
-    if(rank==0) printf( "Started.\n" );
-
-    mapptr_t map =calloc( N, sizeof(map_t) );
-    if( !map ) {
-        fprintf( stderr, "alloc error\n" );
-        return 1;
-    }
+#ifdef FAST_RAND
+    const char* frstr = "ON";
+#else
+    const char* frstr = "OFF";
+#endif
+    
+    if(rank==0) printf( "(i) Started.\n(i) Sorting %ld numbers on %d processes.\n(i) Seed is 0x%x\n(i) Fast random is %s\n",
+            count, procs, SEED[seed], frstr );
 
     double start_time = MPI_Wtime();
-    micksort3( map, count, seed, rank, procs );
+    
+    mapptr_t map = micksort3( count, seed, rank, procs );
+    
     double end_time = MPI_Wtime();
+   
+    if( skip != 0 )
+        printParallel( map, skip, rank, procs );
     
-    
-    if( rank==0) printf( "(t) Sorted %ld elements in %gs\n", count, end_time-start_time );
+    if( rank==0) printf( "(t) Sorting took %gs\n", count, end_time-start_time );
+
 
    // if( rank==0) printMap( map );
-    if( rank==0 ) {
+/*    if( rank==0 ) {
         unsigned char max =0;
         for( size_t i =0; i < N; i++ ) {
             if( map[i] > max ) max =map[i];
         }
 
         printf( "Max count is %d\n", max );
-    }
+    }*/
 
-    free( map );
+
+
+    _mm_free( map );
     
     MPI_Finalize();
 
