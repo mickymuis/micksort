@@ -222,7 +222,7 @@ int
 main( int argc, char** argv ) {
 
     int 	    procs, rank;
-    int 	    seed =0, skip =1;
+    int 	    seed =0, skip =10000;
     uint64_t 	    count = 0;
     int             c;
     const char    * short_opt = "hs:n:i:";
