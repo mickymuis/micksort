@@ -19,9 +19,8 @@
 #include <emmintrin.h>
 #include <pmmintrin.h>
 
-//#define FAST_RAND     // Use the old-fashioned POSIX PRNG instead of the new one from (G)LIBC
-//#define HALF_BINS     // Use bins of 4-bits instead of 8 to save memory and improve cache performance
-
+#define FAST_RAND     // Use the old-fashioned POSIX PRNG instead of the new one from (G)LIBC
+#define HALF_BINS     // Use bins of 4-bits instead of 8 to save memory and improve cache performance
 
 typedef uint8_t map_t;
 typedef map_t* mapptr_t;
@@ -76,18 +75,18 @@ randSeq2( mapptr_t map, uint64_t count, int seed, int rank ) {
 
     for( uint64_t i =0; i < count; i++ ) {
 #ifdef FAST_RAND
-        uint32_t num = rand_simple();
+        uint32_t num = rand_simple() % 64;
 #else        
-        uint32_t num = rand();
+        uint32_t num = rand()% 64;
 #endif
 
 #ifdef HALF_BINS
-        uint32_t idx =(num & 0x7FFFFFFE) >> 2;  // Remove the least bit, divide by two
+        uint32_t idx =(num & 0x7FFFFFFE) >> 1;  // Remove the least bit, divide by two
         uint8_t f = map[idx];                   // Get the corresponding pair of bins
         uint32_t pos =num & 0x1;                // Get the least bit to determine which pair to increment
-        uint8_t mask =0xFF << (pos ? 4 : 0);    // Mask the pair we want
+        uint8_t mask =0xF << (pos ? 4 : 0);    // Mask the pair we want
                                                 // Write back the other pair + our pair incremented by one
-        f = f & ~mask | ((f & mask) + (1 << (pos ? 4 : 0)));
+        f = (f & ~mask) | ((f & mask) + (1 << (pos ? 4 : 0)));
         map[idx] =f;
 
         assert( (f & mask) != 0 );              // Check for overflow
@@ -187,12 +186,12 @@ printParallel( mapptr_t restrict map, unsigned int skip, int rank, int procs ) {
                 MPI_Recv( &skipCount, 1, MPI_INT, rank-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE );
             }
 
-            for( unsigned int i =0; i < bpp/2; i++ ) {
+            for( unsigned int i =0; i < bpp/BINS_PER_BYTE; i++ ) {
 
                 uint8_t f = map[i];   // Get the corresponding pair of bins
 
 #ifdef HALF_BINS
-                int bins[2] = { f & 0xFF, (f >> 4) & 0xFF };
+                int bins[2] = { f & 0xF, (f >> 4) & 0xF };
 #else
                 int bins[1] = { f };
 #endif
@@ -200,7 +199,7 @@ printParallel( mapptr_t restrict map, unsigned int skip, int rank, int procs ) {
                 for( int b =0; b < BINS_PER_BYTE; b++ ) {
                     for( unsigned int j =0; j < bins[b]; j++ ) {
                         if( skipCount == 0 ) {
-                            printf( "%d ", base+i );
+                            printf( "%d ", base + i*BINS_PER_BYTE + b );
                         }
                         if( ++skipCount == skip ) skipCount =0;
                     }

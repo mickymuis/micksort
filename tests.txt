@@ -1,0 +1,69 @@
+Naive qsort, pyramid, N/2 merge buffer
+
+[mefaas@fs1 micksort]$ prun -np 1 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 18.8004s
+[mefaas@fs1 micksort]$ prun -np 2 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 14.813s
+[mefaas@fs1 micksort]$ prun -np 4 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 13.0385s
+[mefaas@fs1 micksort]$ prun -np 8 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 12.2425s
+[mefaas@fs1 micksort]$ prun -np 16 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+
+Naive qsort, pyramid, insertion merge
+
+[mefaas@fs1 micksort]$ prun -np 1 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 18.8245s
+[mefaas@fs1 micksort]$ prun -np 2 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 14.818s
+[mefaas@fs1 micksort]$ prun -np 4 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 13.0396s
+[mefaas@fs1 micksort]$ prun -np 8 -1 -script $PRUN_ETC/prun-openmpi build/micksort
+(t) Sorted 80000000 elements in 12.257s
+
+Counting sort naive, pyramid, SIMD merge, FAST RANDOM
+16G
+1 Node  (t) Sorted 16000000000 elements in 197.06s
+2 Nodes (t) Sorted 16000000000 elements in 100.221s
+4 Nodes (t) Sorted 16000000000 elements in 53.8338s
+8 Nodes (t) Sorted 16000000000 elements in 32.4112s
+16 Nodes(t) Sorted 16000000000 elements in 22.2805s
+
+80M
+1 Node  (t) Sorted 80000000 elements in 1.32033s
+2 Nodes (t) Sorted 80000000 elements in 2.74661s
+4 Nodes (t) Sorted 80000000 elements in 4.68295s
+8 Nodes (t) Sorted 80000000 elements in 8.72736s
+
+Counting sort naive, gather + parallel print, SIMD merge, FAST RANDOM
+        16G             80M             80M (Igather)
+1       200.67s         1.40827s
+2       104.626s        4.70825s        3.11109s
+4       54.6684s        4.60949s        2.92404s
+8       31.6088s        6.57646s        2.98317s
+16      23.5574s        11.1028s        ?
+
+Counting sort 4-bit bins, igather, SIMD merge, GLIBC random
+        16B             80M             1.6M            200K
+1       -               4.28085s        0.341267s       0.266851s
+2       -               3.52983s        1.52962s        1.49207s
+4       -               2.40327s        1.4418s         1.42061s
+8       -               1.93671s        1.53077s        1.49064s
+16      -               1.91732s        1.61514s        1.61439s
+
+Counting sort 8-bit bins, igather, SIMD merge, GLIBC random 
+        16B             80M             1.6M            200K
+1       810.919s        4.6143s         0.594061s       0.52114s
+2       407.088s        4.12661s        2.09625s        2.06978s
+4       204.858s        3.04667s        2.04611s        2.01834s
+8       104.902s        2.47457s        2.04964s        1.91673s
+16      54.0518s        3.42794s        3.36872s        3.17901s
+
+Counting sort 8-bit bins, igather, SIMD merge, fast random
+        160B            80B             16B             80M
+1       2063.13s        1034.98s        206.816s        1.57739s
+2       1033.4s         519.105s        106.391s        3.26186s
+4       520.176s        260.197s        53.7344s        3.09173s
+8       261.439s        132.264s        28.8188s        3.06876s
+16      132.614s        67.8465s        16.1833s        3.22445s
+
